@@ -20,8 +20,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -58,6 +60,9 @@ type CRDInstallOptions struct {
 
 	// Paths is a list of paths to the directories or files containing CRDs
 	Paths []string
+
+	// FS is the file system used for the paths.
+	FS fs.FS
 
 	// CRDs is a list of CRDs to install
 	CRDs []apiextensionsv1.CustomResourceDefinition
@@ -280,8 +285,9 @@ func CreateCRDs(config *rest.Config, crds []apiextensionsv1.CustomResourceDefini
 func renderCRDs(options *CRDInstallOptions) ([]apiextensionsv1.CustomResourceDefinition, error) {
 	var (
 		err   error
-		info  os.FileInfo
-		files []os.FileInfo
+		file  fs.File
+		info  fs.FileInfo
+		files []fs.File
 	)
 
 	type GVKN struct {
@@ -289,27 +295,55 @@ func renderCRDs(options *CRDInstallOptions) ([]apiextensionsv1.CustomResourceDef
 		Name string
 	}
 
+	filesystem := options.FS
+	if filesystem == nil {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+
+		filesystem = os.DirFS(cwd)
+	}
+
 	crds := map[GVKN]apiextensionsv1.CustomResourceDefinition{}
 
 	for _, path := range options.Paths {
-		var filePath = path
-
 		// Return the error if ErrorIfPathMissing exists
-		if info, err = os.Stat(path); os.IsNotExist(err) {
+		if file, err = filesystem.Open(path); errors.Is(err, fs.ErrNotExist) {
+			if options.ErrorIfPathMissing {
+				return nil, err
+			}
+			continue
+		}
+		if info, err = file.Stat(); errors.Is(err, fs.ErrNotExist) {
 			if options.ErrorIfPathMissing {
 				return nil, err
 			}
 			continue
 		}
 
-		if !info.IsDir() {
-			filePath, files = filepath.Dir(path), []os.FileInfo{info}
-		} else if files, err = ioutil.ReadDir(path); err != nil {
-			return nil, err
+		if info.IsDir() {
+			dirEntries, err := fs.ReadDir(filesystem, path)
+			subFs, err := fs.Sub(filesystem, path)
+
+			if err != nil {
+				return nil, err
+			}
+
+			for _, entry := range dirEntries {
+				f, err := subFs.Open(entry.Name())
+				if err != nil {
+					return nil, err
+				}
+
+				files = append(files, f)
+			}
+		} else {
+			files = []fs.File{file}
 		}
 
 		log.V(1).Info("reading CRDs from path", "path", path)
-		crdList, err := readCRDs(filePath, files)
+		crdList, err := readCRDs(files)
 		if err != nil {
 			return nil, err
 		}
@@ -384,20 +418,25 @@ func modifyConversionWebhooks(crds []apiextensionsv1.CustomResourceDefinition, s
 }
 
 // readCRDs reads the CRDs from files and Unmarshals them into structs.
-func readCRDs(basePath string, files []os.FileInfo) ([]apiextensionsv1.CustomResourceDefinition, error) {
+func readCRDs(files []fs.File) ([]apiextensionsv1.CustomResourceDefinition, error) {
 	var crds []apiextensionsv1.CustomResourceDefinition
 
-	// White list the file extensions that may contain CRDs
+	// Allowlist the file extensions that may contain CRDs
 	crdExts := sets.NewString(".json", ".yaml", ".yml")
 
 	for _, file := range files {
 		// Only parse allowlisted file types
-		if !crdExts.Has(filepath.Ext(file.Name())) {
+		info, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+
+		if !crdExts.Has(filepath.Ext(info.Name())) {
 			continue
 		}
 
 		// Unmarshal CRDs from file into structs
-		docs, err := readDocuments(filepath.Join(basePath, file.Name()))
+		docs, err := readDocuments(file)
 		if err != nil {
 			return nil, err
 		}
@@ -414,14 +453,14 @@ func readCRDs(basePath string, files []os.FileInfo) ([]apiextensionsv1.CustomRes
 			crds = append(crds, *crd)
 		}
 
-		log.V(1).Info("read CRDs from file", "file", file.Name())
+		log.V(1).Info("read CRDs from file", "file", info.Name())
 	}
 	return crds, nil
 }
 
 // readDocuments reads documents from file.
-func readDocuments(fp string) ([][]byte, error) {
-	b, err := ioutil.ReadFile(fp) //nolint:gosec
+func readDocuments(file fs.File) ([][]byte, error) {
+	b, err := ioutil.ReadAll(file) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}

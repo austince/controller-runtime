@@ -19,6 +19,7 @@ package envtest
 import (
 	"context"
 	"path/filepath"
+	"sigs.k8s.io/controller-runtime/pkg/envtest/testdata"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -116,6 +117,137 @@ var _ = Describe("Test", func() {
 			)
 			Expect(err).NotTo(HaveOccurred())
 		})
+
+		It("should install the CRDs into the cluster using directory in a filesystem", func() {
+			crds, err = InstallCRDs(env.Config, CRDInstallOptions{
+				Paths: []string{"."},
+				FS: testdata.FS(),
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Expect to find the CRDs
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			err = c.Get(context.TODO(), types.NamespacedName{Name: "foos.bar.example.com"}, crd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd.Spec.Names.Kind).To(Equal("Foo"))
+
+			crd = &apiextensionsv1.CustomResourceDefinition{}
+			err = c.Get(context.TODO(), types.NamespacedName{Name: "bazs.qux.example.com"}, crd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd.Spec.Names.Kind).To(Equal("Baz"))
+
+			crd = &apiextensionsv1.CustomResourceDefinition{}
+			err = c.Get(context.TODO(), types.NamespacedName{Name: "captains.crew.example.com"}, crd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd.Spec.Names.Kind).To(Equal("Captain"))
+
+			crd = &apiextensionsv1.CustomResourceDefinition{}
+			err = c.Get(context.TODO(), types.NamespacedName{Name: "firstmates.crew.example.com"}, crd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd.Spec.Names.Kind).To(Equal("FirstMate"))
+
+			crd = &apiextensionsv1.CustomResourceDefinition{}
+			err = c.Get(context.TODO(), types.NamespacedName{Name: "drivers.crew.example.com"}, crd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(crd.Spec.Names.Kind).To(Equal("Driver"))
+
+			err = WaitForCRDs(env.Config, []apiextensionsv1.CustomResourceDefinition{
+				{
+					Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+						Group: "bar.example.com",
+						Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+							{
+								Name:    "v1",
+								Storage: true,
+								Served:  true,
+								Schema: &apiextensionsv1.CustomResourceValidation{
+									OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+										Type: "object",
+									},
+								},
+							},
+						},
+						Names: apiextensionsv1.CustomResourceDefinitionNames{
+							Plural: "foos",
+						}},
+				},
+				{
+					Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+						Group: "qux.example.com",
+						Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+							{
+								Name:    "v1beta1",
+								Storage: true,
+								Served:  true,
+								Schema: &apiextensionsv1.CustomResourceValidation{
+									OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{},
+								},
+							},
+						},
+						Names: apiextensionsv1.CustomResourceDefinitionNames{
+							Plural: "bazs",
+						}},
+				},
+				{
+					Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+						Group: "crew.example.com",
+						Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+							{
+								Name:    "v1beta1",
+								Storage: true,
+								Served:  true,
+								Schema: &apiextensionsv1.CustomResourceValidation{
+									OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{},
+								},
+							},
+						},
+						Names: apiextensionsv1.CustomResourceDefinitionNames{
+							Plural: "captains",
+						}},
+				},
+				{
+					Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+						Group: "crew.example.com",
+						Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+							{
+								Name:    "v1beta1",
+								Storage: true,
+								Served:  true,
+								Schema: &apiextensionsv1.CustomResourceValidation{
+									OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{},
+								},
+							},
+						},
+						Names: apiextensionsv1.CustomResourceDefinitionNames{
+							Plural: "firstmates",
+						}},
+				},
+				{
+					Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+						Group: "crew.example.com",
+						Names: apiextensionsv1.CustomResourceDefinitionNames{
+							Plural: "drivers",
+						},
+						Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+							{
+								Name:    "v1",
+								Storage: true,
+								Served:  true,
+							},
+							{
+								Name:    "v2",
+								Storage: false,
+								Served:  true,
+							},
+						}},
+				},
+			},
+				CRDInstallOptions{MaxTime: 50 * time.Millisecond, PollInterval: 15 * time.Millisecond},
+			)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should install the CRDs into the cluster using directory", func() {
 			crds, err = InstallCRDs(env.Config, CRDInstallOptions{
 				Paths: []string{validDirectory},
